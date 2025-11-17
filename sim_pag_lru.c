@@ -1,7 +1,9 @@
+
 /*
     Copyright 2023 The Operating System Group at the UAH
-    sim_pag_random.c
+    sim_pag_lru.c
  */
+
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,13 +80,22 @@ unsigned sim_mmu(ssystem* S, unsigned virtual_addr, char op) {
   return physical_addr;
 }
 
+
+//Actualized for LRU
 void reference_page(ssystem* S, int page, char op) {
-  if (op == 'R') {              // If it's a read,
-    S->numrefsread++;           // count it
-  } else if (op == 'W') {       // If it's a write,
-    S->pgt[page].modified = 1;  // count it and mark the
-    S->numrefswrite++;          // page 'modified'
-  }
+    if (op == 'R') {
+        S->numrefsread++;
+    } else if (op == 'W') {
+        S->pgt[page].modified = 1;
+        S->numrefswrite++;
+    }
+
+    // LRU: actualizar timestamp
+    S->pgt[page].timestamp = S->clock;
+    S->clock++;
+    if (S->clock == 0) {
+        printf("WARNING: clock overflow!\n");
+    }
 }
 
 // Functions that simulate the operating system
@@ -124,35 +135,27 @@ void handle_page_fault(ssystem* S, unsigned virtual_addr) {
     }
 }
 
-static unsigned myrandom(unsigned from,  // <<--- random
-                         unsigned size) {
-  unsigned n;
 
-  n = from + (unsigned)(rand() / (RAND_MAX + 1.0) * size);
-
-  if (n > from + size - 1)  // These checks shouldn't
-    n = from + size - 1;    // be necessary, but it's
-  else if (n < from)        // better to not rely too
-    n = from;               // much on the floating
-                            // point operations
-  return n;
-}
-
+//Actualized for LRU
 int choose_page_to_be_replaced(ssystem* S) {
-  int frame, victim;
+    int frame, victim, i;
+    unsigned min_time = ~0U;
 
-  frame = myrandom(0, S->numframes);  // <<--- random
+    for (i = 0; i < S->numframes; i++) {
+        int p = S->frt[i].page;
+        if (S->pgt[p].timestamp < min_time) {
+            min_time = S->pgt[p].timestamp;
+            victim = p;
+            frame = i;
+        }
+    }
 
-  victim = S->frt[frame].page;
+    if (S->detailed)
+        printf("@ Choosing (LRU) P%d of F%d to be replaced\n", victim, frame);
 
-  if (S->detailed)
-    printf(
-        "@ Choosing (at random) P%d of F%d to be "
-        "replaced\n",
-        victim, frame);
-
-  return victim;
+    return victim;
 }
+
 
 void replace_page(ssystem* S, int victim, int newpage) {
   int frame;
@@ -202,16 +205,20 @@ void occupy_free_frame(ssystem* S, int frame, int page) {
 
 void print_page_table(ssystem* S) {
   int p;
+  
+  printf("%10s %10s %10s %10s   %s\n", "PAGE", "Present", "Frame", "Modified", "Timestamp");
 
-  printf("%10s %10s %10s   %s\n", "PAGE", "Present", "Frame", "Modified");
-
-  for (p = 0; p < S->numpags; p++)
+  for (p = 0; p < S->numpags; p++) {
     if (S->pgt[p].present)
-      printf("%8d   %6d     %8d   %6d\n", p, S->pgt[p].present, S->pgt[p].frame,
-             S->pgt[p].modified);
+        printf("%8d   %6d     %8d   %6d     %8u\n",
+               p, S->pgt[p].present, S->pgt[p].frame,
+               S->pgt[p].modified, S->pgt[p].timestamp);
     else
-      printf("%8d   %6d     %8s   %6s\n", p, S->pgt[p].present, "-", "-");
+        printf("%8d   %6d     %8s   %6s     %8s\n",
+               p, S->pgt[p].present, "-", "-", "-");
+    }
 }
+
 
 void print_frames_table(ssystem* S) {
   int p, f;
@@ -233,7 +240,19 @@ void print_frames_table(ssystem* S) {
 }
 
 void print_replacement_report(ssystem* S) {
-  printf(
-      "Random replacement "
-      "(no specific information)\n");  // <<--- random
+
+    unsigned min_ts = 0xFFFFFFFF, max_ts = 0;
+ 
+ int i;
+
+    for (i = 0; i < S->numframes; i++) {
+        int p = S->frt[i].page;
+        if (S->pgt[p].present) {
+            if (S->pgt[p].timestamp < min_ts) min_ts = S->pgt[p].timestamp;
+            if (S->pgt[p].timestamp > max_ts) max_ts = S->pgt[p].timestamp;
+        }
+    }
+
+    printf("LRU replacement policy\n");
+    printf("Clock: %u, Min timestamp: %u, Max timestamp: %u\n", S->clock, min_ts, max_ts);
 }
